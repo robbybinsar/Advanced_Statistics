@@ -1,0 +1,102 @@
+---
+title: "Stats_prac_1"
+author: "Robby B"
+date: "9/28/2021"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**Load Packages**
+```{r}
+library(openxlsx)
+library(ggplot2)
+library(dplyr)
+library(Rmisc)
+library(knitr)
+library(pastecs)
+library(FSA)
+library(nortest)
+library(car)
+```
+
+**Read dataset**
+```{r}
+birth_weight <- read.xlsx("introductory data.xlsx",sheet = "Birth_weight")
+#label sex
+birth_weight$Sex <-factor(birth_weight$Sex, levels = c(1,2), labels = c("male", "female")) 
+```
+
+**Graphs**
+```{r}
+attach(birth_weight)
+#Histogram
+ggplot(birth_weight, aes(x = Weight_g)) +
+  geom_histogram(aes(y = ..density..),fill = "white", colour = "black", bins = 5)+ scale_x_continuous(name = "Weight (g)",breaks = seq(5,20,2)) + geom_density() + facet_grid( ~ Sex) + ylab("Frequency")
+
+#Box plot
+boxplot(Weight_g ~ Sex, ylab = "Weight (g)")
+boxplot.stats(Weight_g)
+
+#Graph with standard error 95%
+  #create summary statistics
+  summary <- birth_weight %>% summarySE(measurevar = "Weight_g", groupvars = c("Sex"), 
+                                        conf.interval = 0.95)
+ggplot(summary, aes(x=Sex, y=Weight_g)) + 
+geom_pointrange(aes(ymin=Weight_g-ci, ymax=Weight_g+ci)) + ylab("Weight (g)")
+
+```
+
+**Descriptive Statistics**
+```{r}
+male_weight <- filter(birth_weight, Sex == "male")[-1]
+female_weight <- filter(birth_weight, Sex == "female")[-1]
+mylist <- list(male = male_weight$Weight_g, female = female_weight$Weight_g)
+
+stat <-sapply(mylist, function(weight) stat.desc(weight))
+print(stat)
+
+df_summary <- data.frame(Summarize(Weight_g ~ Sex, digits = 2))
+kable(df_summary, format = "pipe")
+```
+
+**Normality Tests**
+```{r}
+
+#Shapiro-Wilk Normality Test
+normalitas <- lapply(mylist, function (weight) shapiro.test(weight))
+print(normalitas)
+
+#Kolmogrov-Smirnov
+uji_ks <- lapply(mylist, function(weight) suppressWarnings(ks.test(weight,"pnorm",mean = mean(weight), 
+                            sd = sd(weight))))
+print(uji_ks)
+
+#Lilliefors (Kolmogorov-Smirnov) test for normality
+lillie <- lapply(mylist, function(weight) {lillie.test(weight)})
+print(lillie)
+
+# Q-Q Plot
+qqPlot(male_weight$Weight_g, ylab = "Male Weight")
+qqPlot(female_weight$Weight_g, ylab = "Female Weight")
+
+```
+
+
+**Transformation**
+[Click here](https://rcompanion.org/handbook/I_12.html)
+
+```{r}
+# arcsine transformation in dataset 3
+Allele <- read.xlsx("introductory data.xlsx",sheet = "Allele")
+  #data must be expressed as proportions
+  Allele_proportions <- Allele/100
+
+Allele_transformed <- asin(sqrt(Allele_proportions))
+
+# Log transformation in dataset 4
+Aphids <- read.xlsx("introductory data.xlsx",sheet = "aphids")
+Aphids_log_transformed <- log10(Aphids)
+```

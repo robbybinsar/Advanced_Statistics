@@ -1,0 +1,182 @@
+---
+title: "Stats_prac_2"
+author: "Robby B"
+date: "10/1/2021"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**Load Packages**
+```{r}
+library(haven)
+
+```
+
+**Read data**
+```{r}
+worms2010 <- read_sav("worms2010.sav")
+worms2010 <- worms2010[-(67:75),]
+#label sex
+worms2010$sex <- factor(worms2010$sex, levels = c(1,2), labels = c("male", "female"))
+attach(worms2010)
+```
+
+# A. Weight Data
+
+**Graphs**
+```{r}
+#draw a boxplot of the data
+boxplot(weight ~ sex, ylab = "Weight (g)")
+boxplot.stats(weight)
+
+#draw 2 histograms on separate rows
+ggplot(worms2010, aes(x = weight)) +
+  geom_histogram(aes(y = ..density..),fill = "white", colour = "black", bins = 20)+ 
+  geom_density() +
+  #creating normal distriution line
+  stat_function(fun = dnorm, args = list(mean = mean(weight), sd = sd(weight)), colour = "red") +
+  scale_x_continuous(name = "Weight (g)")  + 
+  facet_grid(sex ~.) + ylab("Frequency")
+
+#draw a bar charts with error bars. The default error bar is the 95% confidence interval
+summary <- worms2010 %>% summarySE(measurevar = "weight", groupvars = c("sex"), 
+                                        conf.interval = 0.95)
+ggplot(summary, aes(x=sex, y=weight)) + 
+  geom_pointrange(aes(ymin=weight-ci, ymax=weight+ci)) + 
+  ylab("Weight (g)")
+
+```
+
+**Homogeneity test**
+```{r}
+#Levene test
+levene <- suppressWarnings(leveneTest(weight ~ sex, data = worms2010, center = "mean"))
+print(levene)
+```
+
+**normality test**
+```{r}
+mylist <- list(male = filter(worms2010, sex == "male")$weight, female = filter(worms2010, sex == "female")$weight)
+
+#Shapiro-Wilk Normality Test
+normalitas <- lapply(mylist, function (weight) shapiro.test(weight))
+print(normalitas)
+
+#Kolmogrov-Smirnov
+uji_ks <- lapply(mylist, function(weight) suppressWarnings(ks.test(weight,"pnorm",mean = mean(weight), 
+                            sd = sd(weight))))
+print(uji_ks)
+
+#Lilliefors (Kolmogorov-Smirnov) test for normality
+lillie <- lapply(mylist, function(weight) {lillie.test(weight)})
+print(lillie)
+
+# Q-Q Plot
+qqPlot(mylist[[1]], ylab = "Male Weight", id = F)
+qqPlot(mylist[[2]], ylab = "Female Weight", id = F)
+
+```
+
+**Independent samples t tests**
+```{r}
+t.test(weight ~ sex, var.equal = T)
+```
+
+**Anova**
+```{r}
+model <- lm(weight ~ sex)
+summary(model)
+hasil_anova <- anova(model)
+print(hasil_anova)
+```
+
+# B. Worms Data
+**Graphs**
+```{r}
+#draw a boxplot of the data
+boxplot(worms ~ sex, ylab = "Worms")
+boxplot.stats(worms)
+
+#draw 2 histograms on separate rows
+ggplot(worms2010, aes(x = worms)) +
+  geom_histogram(aes(y = ..density..),fill = "white", colour = "black", bins = 20)+ 
+  geom_density() +
+  #creating normal distriution line
+  stat_function(fun = dnorm, args = list(mean = mean(worms), sd = sd(worms)), colour = "red") +
+  scale_x_continuous(name = "worms")  + 
+  facet_grid(sex ~.) + ylab("Frequency")
+
+```
+
+**Homogeneity test**
+```{r}
+#Levene test
+levene <- suppressWarnings(leveneTest(worms ~ sex, data = worms2010, center = "mean"))
+print(levene)
+```
+
+**normality test**
+```{r}
+mylist <- list(male = filter(worms2010, sex == "male")$worms, female = filter(worms2010, sex == "female")$worms)
+
+#Shapiro-Wilk Normality Test
+normalitas <- lapply(mylist, function (worms) shapiro.test(worms))
+print(normalitas)
+
+#Kolmogrov-Smirnov
+uji_ks <- lapply(mylist, function(worms) suppressWarnings(ks.test(worms,"pnorm",mean = mean(worms), 
+                            sd = sd(worms))))
+print(uji_ks)
+
+#Lilliefors (Kolmogorov-Smirnov) test for normality
+lillie <- lapply(mylist, function(worms) {lillie.test(worms)})
+print(lillie)
+
+# Q-Q Plot
+qqPlot(mylist[[1]], ylab = "Male Worm", id = F)
+qqPlot(mylist[[2]], ylab = "Female Worm", id = F)
+
+```
+
+**Non parametric tests**
+```{r}
+#The Mann-Whitney test
+wilcox.test(worms ~ sex)
+
+#Kruskal Wallis test --> same with the spss result using mann whitney
+kruskalw <- kruskal.test(worms ~ sex)
+print(kruskalw)
+```
+
+#C. Paired data
+
+**Read data**
+```{r}
+paired_data <- read_sav("pairs(1).sav")
+attach(paired_data)
+```
+
+**t test**
+```{r}
+#paired t test
+t.test(pre, post, paired = T)
+#one sample t test on the difference between pre and post
+t.test(difference)
+```
+both approaches have the same result
+
+**check normality**
+```{r}
+shapiro.test(difference)
+lillie.test(difference)
+```
+The difference of pre and post is not normally distributed, thus, t test result is not valid
+
+**Non parametric test**
+```{r}
+#Wilcoxon Rank-Sum test 
+wilcox.test(difference)
+```

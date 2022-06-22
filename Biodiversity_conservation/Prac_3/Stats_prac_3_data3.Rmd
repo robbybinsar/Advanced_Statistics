@@ -1,0 +1,118 @@
+---
+title: "Stats_prac_3_data3"
+author: "Robby B"
+date: "10/6/2021"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### **Reading and preparing data**
+```{r}
+df <- read.xlsx("C:/Users/robby/OneDrive - University of Leeds/MSc Biodiversity and Conservation/BIodiv and Cons skills/Class 4/f1.xlsx")
+kable(df)
+dependent.var <- df[,1] #Column variabel dependent
+independent.var1 <- df[,2]#Column variabel independent
+independent.var2 <- df[,3]
+satuan <- "(mg)"
+df$Enzy <- factor(df$Enzy, levels = c(0,1,2), labels = c("control", "Enzyme1", "Enzyme2"))
+```
+
+### **Data descriptive summary**
+```{r message=FALSE, warning=FALSE}
+attach(df)
+```
+
+```{r}
+df_summary <- data.frame(Summarize(Response ~ Enzy + Temp, digits = 2))
+kable(df_summary, format = "pipe")
+```
+
+### **Homogeneity test**
+
+#### Levene's test for homogeneity of variance.
+*if p > 0.05 assumption of homogeneity fulfilled*
+```{r}
+levene <- suppressWarnings(leveneTest(Response ~ interaction(Enzy, Temp), data = df))
+print(levene)
+```
+
+### **Normality test**
+*if p > 0.05 assumption of normal distribution fulfilled*
+
+#### Shapiro-Wilk Normality Test
+```{r}
+normalitas <- shapiro.test(Response)
+print(normalitas)
+```
+
+#### Kolmogorov-Smirnov Tests
+```{r}
+uji_ks <- suppressWarnings(ks.test(Response,"pnorm",mean = mean(Response), 
+                            sd = sd(Response)))
+print(uji_ks)
+```
+
+#### Lilliefors (Kolmogorov-Smirnov) test for normality
+Although the test statistic obtained from lillie.test(x) is the same as that obtained from ks.test(x, "pnorm", mean(x), sd(x)), it is not correct to use the p-value from the latter for the composite hypothesis of normality (mean and variance unknown), since the distribution of the test statistic is different when the parameters are estimated.
+
+```{r}
+lillie <- lillie.test(Response)
+print(lillie)
+```
+
+### **Q-Q Plot**
+A Q-Q plot is a scatterplot created by plotting two sets of quantiles against one another. If both sets of quantiles came from the same distribution, we should see the points forming a line that’s roughly straight.
+```{r, fig.width=5.8, fig.height=4.5}
+kol2 <- colnames(df)[1]
+QQplot <- qqPlot(Response, id = F, ylab = kol2, main = "Quantile - Quantile Plot")
+```
+
+### **Box-and-whisker plot**
+```{r fig.align='left', fig.width= 8, fig.height= 4}
+box_whisker <- boxplot(Response ~ Enzy*Temp, 
+                        xlab = paste(kol2,satuan), ylab = "", col = "orange", border = 
+                        "brown", horizontal = TRUE, las = 1, par(mar = c(5,12,1,1), font.axis=2, font.lab=2))
+```
+
+## Two way Anova
+
+**Use this analysis based on homogeneity and normality test results**
+
+```{r}
+library(Rmisc)
+library(agricolae)
+library(ggplot2)
+library(knitr)
+```
+
+
+### **Two way ANOVA**
+```{r}
+model <- lm(Response ~ Enzy + Temp + Enzy:Temp)
+hasil_anova <- anova(model)
+print(hasil_anova)
+```
+
+*Note: If ANOVA's result is significant (p < 0.05) continue with post hoc test
+
+### **Summary linear model (Parameter estimates**
+```{r}
+summ <- summary(model)
+print(summ)
+```
+
+
+
+### **Summarizes data**
+*Gives count, mean, standard deviation, standard error of the mean, and confidence interval (default 95%).*
+```{r}
+independent <- colnames(df)[2]
+dependent <- colnames(df)[1]
+dat <- summarySE(data = df,dependent,groupvars = independent,conf.interval = 0.95)
+dat <- dat[order(dat[,3]),]
+print(dat)
+```
+

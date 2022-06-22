@@ -1,0 +1,118 @@
+---
+title: "Logit Regression Assumptions"
+author: "Robby B"
+date: "11/1/2021"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+* Loading packages
+```{r cars}
+library(tidyverse)
+library(broom)
+library(haven)
+theme_set(theme_classic())
+
+```
+
+#Building a Logistic Regression model
+
+predicting the probability of virus infection based on independent variables
+
+```{r}
+data <- read_sav("~/My R/Advanced_Statistics/Biodiversity_conservation/virus21.sav")
+data$virus <- factor(data$virus, levels = c(0,1), labels = c("uninfected", "infected"))
+# Fit the logistic regression model
+model <- glm(virus ~., data = data, 
+               family = binomial)
+# Predict the probability (p) of virus infections
+probabilities <- predict(model, type = "response")
+predicted.classes <- ifelse(probabilities > 0.5, "infected", "uninfected")
+head(predicted.classes)
+
+```
+
+#Logistic Regression Diagnostics
+
+##Linearity Assumption
+
+Here, we’ll check the linear relationship between continuous predictor variables and the logit of the outcome. This can be done by visually inspecting the scatter plot between each predictor and the logit values.
+
+*Remove qualitative variables from the original data frame and bind the logit values to the data:
+```{r}
+# Select only numeric predictors
+mydata <- data %>%
+  dplyr::select_if(is.numeric) 
+predictors <- colnames(mydata)
+# Bind the logit and tidying the data for plot
+mydata <- mydata %>%
+  mutate(logit = log(probabilities/(1-probabilities))) %>%
+  gather(key = "predictors", value = "predictor.value", -logit)
+
+
+```
+
+* Create the Scatter Plots:
+```{r}
+ggplot(mydata, aes(logit, predictor.value))+
+  geom_point(size = 0.5, alpha = 0.5) +
+  geom_smooth(method = "loess") + 
+  theme_bw() + 
+  facet_wrap(~predictors, scales = "free_y", nrow = 2, ncol = 2)
+
+```
+
+##Influential Values
+
+Influential values are extreme individual data points that can alter the quality of the logistic regression model.
+
+The most extreme values in the data can be examined by visualizing the Cook’s distance values. Here we label the top 3 largest values:
+```{r}
+plot(model, which = 4, id.n = 3)
+```
+
+Note that, not all outliers are influential observations. To check whether the data contains potential influential observations, the standardized residual error can be inspected. Data points with an absolute standardized residuals above 3 represent possible outliers and may deserve closer attention.
+
+The following R code computes the standardized residuals .std.resid and the Cook’s distance .cooksd using the R function augment() [broom package].
+
+```{r}
+# Extract model results
+model.data <- augment(model) %>% 
+  mutate(index = 1:n()) 
+```
+
+The data for the top 3 largest values, according to the Cook’s distance, can be displayed as follow:
+
+```{r}
+model.data %>% top_n(3, .cooksd)
+```
+
+Plot the Standardized Residuals:
+```{r}
+ggplot(model.data, aes(index, .std.resid)) + 
+  geom_point(aes(color = virus), alpha = .5) +
+  theme_bw() + ylab("Standardized Residuals")
+```
+
+Filter potential influential data points with abs(.std.res) > 3:
+```{r}
+model.data %>% 
+  filter(abs(.std.resid) > 3)
+```
+
+##Multicollinearity
+
+Multicollinearity corresponds to a situation where the data contain highly correlated predictor variables.
+
+Multicollinearity is an important issue in regression analysis and should be fixed by removing the concerned variables. It can be assessed using the R function vif() [car package], which computes the variance inflation factors:
+
+```{r}
+multic <- car::vif(model)
+print(multic)
+```
+
+As a rule of thumb, a VIF value that exceeds 4 or 10 indicates a problematic amount of collinearity. In our example, there is no collinearity: all variables have a value of VIF well below 4.
