@@ -1,0 +1,108 @@
+---
+title: "KDE"
+output: word_document
+date: '2022-05-02'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(sf)
+library(sp)
+library(adehabitatHR)
+library(rgdal)
+library(raster)
+library(rgeos)
+library(terra)
+library(amt)
+```
+
+
+# Data Preparation
+```{r}
+#load the dataset
+cowswetdata <- readOGR("~/My R/Advanced_Statistics/GISandEnvironment/dataset/femalewetpr.shp")
+cowsdrydata <- readOGR("~/My R/Advanced_Statistics/GISandEnvironment/dataset/femaledrypr.shp")
+bullswetdata <- readOGR("~/My R/Advanced_Statistics/GISandEnvironment/dataset/malewetpr.shp")
+bullsdrydata <- readOGR("~/My R/Advanced_Statistics/GISandEnvironment/dataset/maledrypr.shp")
+
+fence <- readOGR("~/My R/Advanced_Statistics/GISandEnvironment/fencer11.shp")
+ENP <- readOGR("~/My R/Advanced_Statistics/GISandEnvironment/Fence.shp")
+```
+
+# KDE
+```{r}
+
+kernel.ref <- kernelUD(cowswetdata, h = 1550, grid = 700, boundary = fence)
+image(kernel.ref) # plot
+
+```
+# Contour
+```{r}
+contour50 <- getverticeshr(kernel.ref, percent = 50, ida = "kde50")
+contour95 <- getverticeshr(kernel.ref, percent = 95, ida = "kde95")
+contour99 <- getverticeshr(kernel.ref, percent = 99, ida = "kde99")
+
+
+plot(contour99)  + plot(contour95, add = TRUE) +plot(contour50, add=TRUE, col="green") +plot(ENP, add=TRUE)  #points(cowswetdata, cex = .3)
+
+output <- rbind(contour50, contour95, contour99, makeUniqueIDs = TRUE)
+
+writeOGR(output, "~/My R/Advanced_Statistics/GISandEnvironment",layer = "KDEcowswet1", driver = "ESRI Shapefile")
+```
+
+
+
+
+# DISCARDED
+```{r}
+#discarded
+contour50sf <- st_as_sf(contour50)
+contour95sf <- st_as_sf(contour95)
+contour99sf <- st_as_sf(contour99)
+```
+
+```{r}
+#calculate reference bandwidth
+library(sf)
+library(sp)
+library(adehabitatHR)
+library(rgdal)
+library(raster)
+library(rgeos)
+library(terra)
+
+
+# Read the csv file (should be in your working directory)
+mydata <- read.csv("~/My R/Advanced_Statistics/GISandEnvironment/dataset/malewet.csv", 
+                    stringsAsFactors = FALSE) 
+
+# Create a copy of the object to make into a SpatialPointsDataFrame
+# Only include three columns (id, x, and y coordinates) for estimating home ranges
+mydatasp <- mydata[, c("longitude", "latitude")]
+
+coordinates(mydatasp) <- c("longitude", "latitude")
+
+# Set the coordinate reference system (CRS)
+# More information on CRS here: 
+# https://www.nceas.ucsb.edu/~frazier/RSpatialGuides/OverviewCoordinateReferenceSystems.pdf
+# The sample data are UTM points in WGS84 from zone 18N
+proj4string(mydatasp) <- CRS( "+proj=longlat +datum=WGS84 +no_defs" )
+mydatasppr <- spTransform(mydatasp, "+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0 +k=1 +units=m +nadgrids=@null +wktext +no_defs +type=crs")
+
+#calculate reference bandwith
+df <- data.frame(mydatasppr@coords)
+tracku <- make_track(df, longitude, latitude, crs = 3857)
+hr_kde_ref(tracku)
+
+
+#wgs84 4326
+#mercartor 3857
+
+
+```
+
+
+
