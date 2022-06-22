@@ -1,0 +1,113 @@
+---
+title: "ANOVA Pop Dynamics part 2"
+subtitle: "Part 2"
+author: "Robby"
+date: "11/30/2021"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**Use this analysis based on homogeneity and normality test results**
+
+```{r}
+library(Rmisc)
+library(agricolae)
+library(ggplot2)
+library(knitr)
+library(haven)
+```
+
+
+### **Reading and preparing data**
+```{r}
+setwd("~/My R/Advanced_Statistics/pop_dynamics")
+df <- read_sav("data.sav")
+#satuan <- "(cm)"
+kable(df)
+df$Fishery <- factor(df$Fishery, levels = c(0,1), labels = c("without", "with"))
+```
+
+```{r message=FALSE, warning=FALSE}
+attach(df)
+```
+
+
+### **One-way ANOVA**
+```{r}
+model <- lm(logabundance ~ Fishery)
+hasil_anova <- anova(model)
+print(hasil_anova)
+```
+
+*Note: If ANOVA's result is significant (p < 0.05) continue with post hoc test
+
+### **Summary linear model**
+```{r}
+summ <- summary(model)
+print(summ)
+```
+
+### **Post Hoc: Tukey's HSD**
+```{r}
+independent <- colnames(df)[1]
+dependent <- colnames(df)[3]
+test_tukey <- HSD.test(model,colnames(df)[1], unbalanced = F)
+print(test_tukey)
+notasi <- test_tukey$groups[order(test_tukey$groups[,1]),]
+notasi <- notasi[,2]
+```
+
+### **Summarizes data**
+*Gives count, mean, standard deviation, standard error of the mean, and confidence interval (default 95%).*
+```{r}
+dat <- summarySE(data = df,"Abundance",groupvars = independent,conf.interval = 0.95)
+dat <- dat[order(dat[,3]),]
+print(dat)
+```
+
+### **ggPlot**
+```{r fig.width= 7, fig.height= 7}
+##offset.v:kode instruksi untuk pengaturan posisi vertikal huruf hasil uji lanjut di atas nilai SE
+offset.v = -0.2
+##offset.h:kode instruksi untuk pengaturan posisi horizontal huruf hasil uji lanjut di atas nilai SE
+offset.h = -1
+#ggplot: kode instruksi untuk penyusunan grafik
+#geom_bar: kode untuk pengaturan diagram batang)
+#geom_errorbar: kode untuk pembubuhan SE di diagram batang)
+#geom_text: kode untuk pembubuhan huruf, kata, frase atau kalimat di grafik)
+#labs: kode untuk pengaturan nama judul sumbu x dan y)
+#them_bw: kode pengaturan grafik hitam putih
+#theme: kode pengaturan latar grafik, ukuran huruf, tipe huruf, dll)
+variable <- round(dat[,3], 2)
+treatment <- dat[,1]
+grafik <- ggplot(dat,
+            aes(x= reorder(treatment,variable), y= variable),ymax=8,ymin=0.0)+
+            geom_bar(stat="identity", fill="white",colour="black",width = 0.6)+
+            geom_errorbar(aes(ymin=variable-se,
+                    ymax=variable+se),width=0.1,size=0.6,colour="black") +
+            geom_text(aes(label= notasi,hjust=offset.h, vjust=offset.v),size=5) +
+            geom_text(aes(label=variable),position = position_dodge(width = 0.4),
+                    vjust = -0.25, hjust = 1.1,size = 4.5)+
+            labs(x = independent, y = "Abundance Mean of Overall Stages and Years", 
+                    title = paste("Effect of",independent, "on", "Population Abundance"), 
+                    subtitle = "Analysis of Variance \nPost Hoc Analysis: Tukey's Test") +
+            theme_bw() +
+            theme(
+                panel.background = element_blank(),
+                panel.grid.major = element_blank(),
+                panel.grid.minor = element_blank(),
+                panel.border = element_blank(),
+                plot.title = element_text(size = rel(1.5),face = "bold",hjust=0),
+                plot.subtitle = element_text(size = rel(1.2), hjust = 0),
+                axis.title = element_text(face="bold",size = 11),
+                axis.title.y = element_text(vjust = 4,size = 13.5),
+                axis.title.x = element_text(vjust=-2, size=13.5),
+                axis.line = element_line(colour="black"),
+                axis.text = element_text(size = 13,color = "black"),
+                plot.margin = margin(1,1,1,1,"cm"))
+print(grafik)
+```
+

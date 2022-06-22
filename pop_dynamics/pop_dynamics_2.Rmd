@@ -1,0 +1,95 @@
+---
+title: "Homogeneity and normality"
+subtitle: "Population dynamics part 2"
+author: "Robby"
+date: "11/30/2021"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(FSA)
+library(car)
+library(nortest)
+library(knitr)
+library(haven)
+
+```
+
+
+### **Reading and preparing data**
+```{r}
+setwd("~/My R/Advanced_Statistics/pop_dynamics")
+df <- read_sav("data.sav")
+kable(df)
+dependent.var <- df[,3] #Column variabel dependent
+independent.var <- df[,1]#Column variabel independent
+df$Fishery <- factor(df$Fishery, levels = c(0,1), labels = c("without", "with"))
+#satuan <- "(cm)"
+```
+
+### **Data descriptive summary**
+```{r message=FALSE, warning=FALSE}
+attach(df)
+```
+
+```{r}
+df_summary <- data.frame(Summarize(logabundance ~ Fishery, digits = 2))
+kable(df_summary, format = "pipe")
+```
+
+### **Homogeneity test**
+
+#### Levene's test for homogeneity of variance.
+*if p > 0.05 assumption of homogeneity fulfilled*
+```{r}
+levene <- suppressWarnings(leveneTest(logabundance ~ Fishery, data = df))
+print(levene)
+```
+
+### **Normality test**
+*if p > 0.05 assumption of normal distribution fulfilled*
+
+#### Shapiro-Wilk Normality Test
+```{r}
+logabundance_with <- subset(logabundance, Fishery == "with")
+logabundance_without <- subset(logabundance, Fishery == "without")
+normalitas_with <- shapiro.test(logabundance_with)
+normalitas_without <- shapiro.test(logabundance_without)
+print(normalitas_with)
+print(normalitas_without)
+```
+
+#### Kolmogorov-Smirnov Tests
+```{r}
+uji_ks <- suppressWarnings(ks.test(logabundance,"pnorm",mean = mean(logabundance), 
+                            sd = sd(logabundance)))
+print(uji_ks)
+```
+
+#### Lilliefors (Kolmogorov-Smirnov) test for normality
+Although the test statistic obtained from lillie.test(x) is the same as that obtained from ks.test(x, "pnorm", mean(x), sd(x)), it is not correct to use the p-value from the latter for the composite hypothesis of normality (mean and variance unknown), since the distribution of the test statistic is different when the parameters are estimated.
+
+```{r}
+lillie <- lillie.test(logabundance)
+print(lillie)
+```
+
+### **Q-Q Plot**
+A Q-Q plot is a scatterplot created by plotting two sets of quantiles against one another. If both sets of quantiles came from the same distribution, we should see the points forming a line that’s roughly straight.
+```{r, fig.width=5.8, fig.height=4.5}
+kol2 <- colnames(df)[2]
+QQplot <- qqPlot(logabundance, id = F, ylab = kol2, main = "Quantile - Quantile Plot")
+```
+
+### **Box-and-whisker plot**
+```{r fig.align='left', fig.width= 8, fig.height= 4}
+box_whisker <- boxplot(logabundance ~ Fishery, 
+                        xlab = "Log Abundance", ylab = "", col = "orange", border = 
+                        "brown", horizontal = TRUE, las = 1, par(mar = c(5,12,1,1), font.axis=2, font.lab=2))
+```
+
+
