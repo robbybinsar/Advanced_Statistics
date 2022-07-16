@@ -1,0 +1,497 @@
+---
+title: "Comobining SDM for historical or current predictors"
+output: word_document
+date: '2022-06-24'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#BIOCLIM
+
+#Load packages
+```{r}
+library("sp")
+library("raster")
+library("maptools")
+library("rgdal")
+library("dismo")
+library("sf")
+library("terra")
+library("geodata")
+library("bnspatial")
+``` 
+
+# Load environmental variables
+```{r}
+
+bioclim.data <- list.files("~/My R/Advanced_Statistics/summerproject/species_modelling/historical/20182019",pattern = "*.tif$", full.names = TRUE)
+bioclim.data <- lapply(bioclim.data, raster)
+bioclim.data <- stack(bioclim.data)
+bioclim.data$Tree_cover  <- extractByMask(bioclim.data$Tree_cover, bioclim.data$Distance_to_Crops, spatial = T)
+matr <- c(100, bioclim.data@layers[[8]]@data@max, 0)
+rec_matrix <- matrix(matr, ncol = 3)
+bioclim.data$Tree_cover <- reclassify(bioclim.data$Tree_cover, rec_matrix)
+
+bioclim.data <- dropLayer(bioclim.data, "Slope")
+```
+
+# Load observation data and Aceh Boundary
+```{r}
+obs.data <- readOGR("~/My R/Advanced_Statistics/summerproject/species_modelling/all_dataset_new.shp")
+names(obs.data)[2]<- "latitude"
+names(obs.data)[3] <- "longitude"
+
+aceh <- st_read("~/My R/Advanced_Statistics/summerproject/BATAS_PROVINSI_ACEH.shp")
+colnames(obs.data@coords)[1] <- "longitude"
+colnames(obs.data@coords)[2] <- "latitude"
+
+```
+
+# Set geographic extent
+```{r}
+#Determine geographic extent of our data
+geographic.extent <- extent(bioclim.data)
+
+```
+
+#The pseudo-absence point
+
+```{r}
+# Use the bioclim data files for sampling resolution
+bil.files <- list.files(path = "~/My R/Advanced_Statistics/summerproject/species_modelling/historical/20182019", 
+                          pattern = "*.tif$", 
+                          full.names = TRUE)
+
+# We only need one file, so use the first one in the list of .bil files
+mask <- raster(bil.files[1])
+
+# Set the seed for the random-number generator to ensure results are similar
+set.seed(20210707)
+
+# Randomly sample points (same number as our observed points)
+background <- randomPoints(mask = mask,     # Provides resolution of sampling points
+                   n = nrow(obs.data),      # Number of random points
+                   ext = geographic.extent, # Spatially restricts sampling
+                   extf = 1.25)             # Expands sampling a little bit
+
+```
+
+
+#create train and test data for pseudo-absence
+```{r}
+# Arbitrarily assign group 1 as the testing data group
+testing.group <- 1
+
+# Create vector of group memberships
+group.presence <- kfold(x = obs.data@coords, k = 5) # kfold is in dismo package
+```
+
+```{r}
+head(group.presence)
+# Should see even representation in each group
+table(group.presence)
+
+```
+
+```{r}
+# Separate observations into training and testing groups
+presence.train <- obs.data[group.presence != testing.group, ]
+presence.test <- obs.data[group.presence == testing.group, ]
+
+# Repeat the process for pseudo-absence points
+group.background <- kfold(x = background, k = 5)
+background.train <- background[group.background != testing.group, ]
+background.test <- background[group.background == testing.group, ]
+
+```
+
+#Training and testing the model and predict
+
+```{r}
+# Build a model using training data
+bc.model <- bioclim(x = bioclim.data, p =presence.train@coords)
+
+# Predict presence from model (same as previously, but with the update model)
+predict.presence.pseudo <- dismo::predict(object = bc.model, 
+                                   x = bioclim.data, 
+                                   ext = geographic.extent)
+response(bc.model)
+
+```
+
+# Generate Threshold
+```{r}
+# Use testing data for model evaluation
+bc.eval <- evaluate(p = presence.test@coords,   # The presence testing data
+                    a = background.test, # The absence testing data
+                    model = bc.model,    # The model we are evaluating
+                    x = bioclim.data)    # Climatic variables for use by model
+
+# Determine minimum threshold for "presence"
+stat_used <- "spec_sens"
+bc.threshold <- threshold(x = bc.eval, stat = stat_used)
+
+```
+
+# Generate a map with threshold
+```{r}
+reclass_predict.presence.pseudo <- predict.presence.pseudo > bc.threshold
+rm <- c(0, NA)
+reclassmatrix  <- matrix(rm, ncol = 2)
+reclass_predict.presence.pseudo <- reclassify(reclass_predict.presence.pseudo, reclassmatrix)
+
+```
+
+# REGRESSION
+
+#Load packages
+```{r}
+library("sp")
+library("raster")
+library("maptools")
+library("rgdal")
+library("dismo")
+library("sf")
+library("terra")
+library("geodata")
+``` 
+
+# Load environmental variables
+```{r}
+predictors <- list.files("~/My R/Advanced_Statistics/summerproject/species_modelling/historical/20182019",pattern = "*.tif$", full.names = TRUE)
+predictors <- lapply(predictors, raster)
+predictors <- stack(predictors)
+predictors$Tree_cover  <- extractByMask(predictors$Tree_cover, predictors$Distance_to_Crops, spatial = T)
+matr <- c(100, predictors@layers[[8]]@data@max, 0)
+rec_matrix <- matrix(matr, ncol = 3)
+predictors$Tree_cover <- reclassify(predictors$Tree_cover, rec_matrix)
+```
+
+# Load observation data and Aceh Boundary
+```{r}
+obs.data <- readOGR("~/My R/Advanced_Statistics/summerproject/species_modelling/all_dataset_new.shp")
+names(obs.data)[2]<- "latitude"
+names(obs.data)[3] <- "longitude"
+
+aceh <- st_read("~/My R/Advanced_Statistics/summerproject/BATAS_PROVINSI_ACEH.shp")
+colnames(obs.data@coords)[1] <- "longitude"
+colnames(obs.data@coords)[2] <- "latitude"
+
+```
+
+# Set geographic extent
+```{r}
+#Determine geographic extent of our data
+ext <- extent(predictors)
+
+```
+
+# Create random points
+
+```{r}
+# Use the bioclim data files for sampling resolution
+bil.files <- list.files(path = "~/My R/Advanced_Statistics/summerproject/species_modelling/historical/20182019", 
+                          pattern = "*.tif$", 
+                          full.names = TRUE)
+
+# We only need one file, so use the first one in the list of .bil files
+mask <- raster(bil.files[1])
+
+# Set the seed for the random-number generator to ensure results are similar
+set.seed(20210707)
+
+# Randomly sample points (same number as our observed points)
+backgr <- randomPoints(mask = predictors,     # Provides resolution of sampling points
+                   n = nrow(obs.data),      # Number of random points
+                   ext = ext, # Spatially restricts sampling
+                   extf = 1.25)             # Expands sampling a little bit
+
+colnames(backgr) = c('longitude', 'latitude')
+```
+
+#create train and test data for presence
+```{r}
+# Arbitrarily assign group 1 as the testing data group
+testing.group <- 1
+
+# Create vector of group memberships
+set.seed(0)
+group <- kfold(x = obs.data@coords, k = 5) # kfold is in dismo package
+
+head(group)
+# Should see even representation in each group
+table(group)
+
+```
+
+```{r}
+# Separate observations into training and testing groups
+pres_train <- obs.data@coords[group != testing.group, ]
+pres_test <- obs.data@coords[group == testing.group, ]
+```
+
+#create train and test data for absence
+```{r}
+# Repeat the process for pseudo-absence points
+set.seed(10)
+group.background <- kfold(x = backgr, k = 5)
+backg_train <- backgr[group.background != testing.group, ]
+backg_test <- backgr[group.background == testing.group, ]
+
+```
+
+We now have a set of predictor variables (rasters) and occurrence points. The next step is to extract the values of the predictors at the locations of the points. (This step can be skipped for the modeling methods that are implemented in the dismo package). This is a very straightforward thing to do using the ‘extract’ function from the raster package. In the example below we use that function first for the Bradypus occurrence points, then for random background points.
+
+#Extract environmental values based on presence and absence train coordinates
+```{r}
+train <- rbind(pres_train, backg_train)
+pb_train <- c(rep(1, nrow(pres_train)), rep(0, nrow(backg_train)))
+envtrain <- extract(predictors, train)
+envtrain <- data.frame( cbind(pa=pb_train, envtrain) )
+envtrain[,'Slope'] = factor(envtrain[,'Slope'], levels=1:5)
+head(envtrain)
+```
+
+#Extract environmental values based on presence and absence test coordinates
+```{r}
+testpres <- data.frame( extract(predictors, pres_test) )
+testbackg <- data.frame( extract(predictors, backg_test) )
+testpres[ ,'Slope'] = factor(testpres[ ,'Slope'], levels=1:5)
+testbackg[ ,'Slope'] = factor(testbackg[ ,'Slope'], levels=1:5)
+
+```
+
+#Generalized Linear Models
+```{r}
+# logistic regression:
+gm1 <- glm(pa ~ DEM + Distance_to_Crops + Distance_to_Forest + Distance_to_Roads + Distance_to_Villages + Tree_cover + Slope,
+            family = binomial(link = "logit"), data=envtrain)
+summary(gm1)
+coef(gm1)
+
+# Gaussian
+gm2 <- glm(pa ~ DEM + Distance_to_Crops + Distance_to_Forest + Distance_to_Roads + Distance_to_Villages + Tree_cover + Slope,
+            family = gaussian(link = "identity"), data=envtrain)
+summary(gm2)
+coef(gm2)
+
+# Poisson
+gm3 <- glm(pa ~ DEM + Distance_to_Crops + Distance_to_Forest + Distance_to_Roads + Distance_to_Villages + Tree_cover + Slope,
+            family = poisson(link = "log"), data=envtrain)
+summary(gm3)
+coef(gm3)
+```
+
+# Evaluate model and indicate the best model with AIC and AUC scores
+choose the highest AUC and the lowest AIC
+```{r}
+ge1 <- evaluate(testpres, testbackg, gm1)
+ge2 <- evaluate(testpres, testbackg, gm2)
+ge3 <- evaluate(testpres, testbackg, gm3)
+print(c(ge1,ge2,ge3))
+print (c(gm1[["aic"]],gm2[["aic"]],gm3[["aic"]]))
+```
+
+#Predict the model
+```{r}
+pg <- predict(predictors, gm1, ext=ext)
+```
+
+#generate threshold and plot it
+```{r}
+stat_used <- "spec_sens"
+tr <- threshold(ge1, stat_used)
+
+plot(pg > tr, main='presence/absence')
+plot(aceh$geometry, add=TRUE, border='dark grey')
+#points(pres_train, pch='+')
+#points(backg_train, pch='-', cex=0.25)
+
+```
+
+# Generate a map with threshold
+```{r}
+predict_threshold <- pg > tr
+rm <- c(0, NA)
+reclassmatrix  <- matrix(rm, ncol = 2)
+predict_threshold <- reclassify(predict_threshold, reclassmatrix)
+
+```
+
+#MAXENT
+
+#Load packages
+```{r}
+library("sp")
+library("raster")
+library("maptools")
+library("rgdal")
+library("dismo")
+library("sf")
+library("terra")
+library("geodata")
+library("rJava")
+``` 
+
+# Load environmental variables
+```{r}
+predictors <- list.files("~/My R/Advanced_Statistics/summerproject/species_modelling/historical/20182019",pattern = "*.tif$", full.names = TRUE)
+predictors <- lapply(predictors, raster)
+predictors <- stack(predictors)
+predictors$Tree_cover  <- extractByMask(predictors$Tree_cover, predictors$Distance_to_Crops, spatial = T)
+matr <- c(100, predictors@layers[[8]]@data@max, 0)
+rec_matrix <- matrix(matr, ncol = 3)
+predictors$Tree_cover <- reclassify(predictors$Tree_cover, rec_matrix)
+```
+
+# Load observation data and Aceh Boundary
+```{r}
+obs.data <- readOGR("~/My R/Advanced_Statistics/summerproject/species_modelling/all_dataset_new.shp")
+names(obs.data)[2]<- "latitude"
+names(obs.data)[3] <- "longitude"
+
+aceh <- st_read("~/My R/Advanced_Statistics/summerproject/BATAS_PROVINSI_ACEH.shp")
+colnames(obs.data@coords)[1] <- "longitude"
+colnames(obs.data@coords)[2] <- "latitude"
+
+```
+
+# Set geographic extent
+```{r}
+#Determine geographic extent of our data
+ext <- extent(predictors)
+
+```
+
+
+# Create random points
+
+```{r}
+# Use the bioclim data files for sampling resolution
+bil.files <- list.files(path = "~/My R/Advanced_Statistics/summerproject/species_modelling/historical/20182019", 
+                          pattern = "*.tif$", 
+                          full.names = TRUE)
+
+# We only need one file, so use the first one in the list of .bil files
+mask <- raster(bil.files[1])
+
+# Set the seed for the random-number generator to ensure results are similar
+set.seed(20210707)
+
+# Randomly sample points (same number as our observed points)
+backgr <- randomPoints(mask = predictors,     # Provides resolution of sampling points
+                   n = nrow(obs.data),      # Number of random points
+                   ext = ext, # Spatially restricts sampling
+                   extf = 1.25)             # Expands sampling a little bit
+
+colnames(backgr) = c('longitude', 'latitude')
+```
+
+
+#create train and test data for presence
+```{r}
+# Arbitrarily assign group 1 as the testing data group
+testing.group <- 1
+
+# Create vector of group memberships
+set.seed(0)
+group <- kfold(x = obs.data@coords, k = 5) # kfold is in dismo package
+
+head(group)
+# Should see even representation in each group
+table(group)
+
+```
+
+```{r}
+# Separate observations into training and testing groups
+pres_train <- obs.data@coords[group != testing.group, ]
+pres_test <- obs.data@coords[group == testing.group, ]
+```
+
+#create train and test data for absence
+```{r}
+# Repeat the process for pseudo-absence points
+set.seed(10)
+group.background <- kfold(x = backgr, k = 5)
+backg_train <- backgr[group.background != testing.group, ]
+backg_test <- backgr[group.background == testing.group, ]
+
+```
+
+#Maxent Models
+```{r}
+maxent()
+xm <- maxent(predictors, pres_train,backg_train,factors='Slope')
+plot(xm)
+response(xm)
+
+```
+
+# Evaluate model and indicate the best model with AIC and AUC scores
+```{r}
+e <- evaluate(pres_test, backg_test, xm, predictors)
+e
+
+```
+
+#Predict the model
+```{r}
+px <- predict(predictors, xm, ext=ext, progress='')
+```
+
+#generate threshold and plot it
+```{r}
+stat_used <- "spec_sens"
+tr <- threshold(e, stat_used)
+plot(px > tr, main='presence/absence')
+plot(aceh$geometry, add=TRUE, border='dark grey')
+#points(pres_train, pch='+')
+
+```
+
+# Generate a map with threshold
+```{r}
+predict_threshold <- px > tr
+rm <- c(0, NA)
+reclassmatrix  <- matrix(rm, ncol = 2)
+predict_threshold <- reclassify(predict_threshold, reclassmatrix)
+
+```
+
+#COMBINING
+
+rescale and stack the predicted models together
+```{r}
+library(climateStability)
+models <- list(predict.presence.pseudo, pg, px)
+models <- lapply(models, rescale0to1)
+models <- stack(models)
+names(models) <- c("bioclim", "glm", "maxent")
+plot(models)
+```
+
+Now we can compute the simple average:
+```{r}
+m <- mean(models)
+plot(m, main='average score')
+```
+
+Above computation has concern in weighting. Let’s combine three models weighted by their AUC scores. Here, to create the weights, we substract 0.5 (the random expectation) and square the result to give further weight to higher AUC values.
+```{r}
+auc <- sapply(list(bc.eval, ge1, e), function(x) x@auc)
+w <- (auc-0.5)^2
+m2 <- weighted.mean( models[[c("bioclim", "glm", "maxent")]], w)
+
+
+m2 <- rescale0to1(m2)
+plot(m2, main='weighted mean of three models')
+```
+
+# Write raster ONCE
+```{r}
+
+raster::writeRaster(m2, paste0("~/My R/Advanced_Statistics/summerproject/species_modelling/results/combined_SDM.tif"), overwrite = TRUE)
+```

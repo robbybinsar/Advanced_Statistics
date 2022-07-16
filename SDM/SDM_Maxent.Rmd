@@ -1,0 +1,204 @@
+---
+title: "SDM Maxent"
+output: word_document
+date: '2022-06-30'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Load packages
+```{r}
+library("sp")
+library("raster")
+library("maptools")
+library("rgdal")
+library("dismo")
+library("sf")
+library("terra")
+library("geodata")
+library("rJava")
+library("bnspatial")
+``` 
+
+# Load environmental variables
+```{r}
+predictors <- list.files("~/My R/Advanced_Statistics/summerproject/species_modelling/historical/20182019",pattern = "*.tif$", full.names = TRUE)
+predictors <- lapply(predictors, raster)
+predictors <- stack(predictors)
+predictors$Tree_cover  <- extractByMask(predictors$Tree_cover, predictors$Distance_to_Crops, spatial = T)
+matr <- c(100, predictors@layers[[8]]@data@max, 0)
+rec_matrix <- matrix(matr, ncol = 3)
+predictors$Tree_cover <- reclassify(predictors$Tree_cover, rec_matrix)
+```
+
+# Load observation data and Aceh Boundary
+```{r}
+obs.data <- readOGR("~/My R/Advanced_Statistics/summerproject/species_modelling/all_dataset_new.shp")
+names(obs.data)[2]<- "latitude"
+names(obs.data)[3] <- "longitude"
+
+aceh <- st_read("~/My R/Advanced_Statistics/summerproject/BATAS_PROVINSI_ACEH.shp")
+colnames(obs.data@coords)[1] <- "longitude"
+colnames(obs.data@coords)[2] <- "latitude"
+
+```
+
+# Set geographic extent
+```{r}
+#Determine geographic extent of our data
+ext <- extent(predictors)
+
+```
+
+
+# Create random points
+
+```{r}
+# Use the bioclim data files for sampling resolution
+bil.files <- list.files(path = "~/My R/Advanced_Statistics/summerproject/species_modelling/historical/20182019", 
+                          pattern = "*.tif$", 
+                          full.names = TRUE)
+
+# We only need one file, so use the first one in the list of .bil files
+mask <- raster(bil.files[1])
+
+# Set the seed for the random-number generator to ensure results are similar
+set.seed(20210707)
+
+# Randomly sample points (same number as our observed points)
+backgr <- randomPoints(mask = predictors,     # Provides resolution of sampling points
+                   n = nrow(obs.data),      # Number of random points
+                   ext = ext, # Spatially restricts sampling
+                   extf = 1.25)             # Expands sampling a little bit
+
+colnames(backgr) = c('longitude', 'latitude')
+```
+
+# Plot the pseudo-absence points and observation data
+```{r, fig.dim= c(6,8)}
+plot(aceh$geometry,
+     axes = TRUE, 
+     col = "grey95",
+     main = "Presence and pseudo-absence points")
+
+# Add the background points
+points(backgr, col = "grey30", pch = 1, cex = 0.75)
+
+# Add the observations
+points(obs.data@coords, 
+       col = "olivedrab", 
+       pch = 20, 
+       cex = 0.75)
+
+box()
+
+```
+
+
+#create train and test data for presence
+```{r}
+# Arbitrarily assign group 1 as the testing data group
+testing.group <- 1
+
+# Create vector of group memberships
+set.seed(0)
+group <- kfold(x = obs.data@coords, k = 5) # kfold is in dismo package
+
+head(group)
+# Should see even representation in each group
+table(group)
+
+```
+
+```{r}
+# Separate observations into training and testing groups
+pres_train <- obs.data@coords[group != testing.group, ]
+pres_test <- obs.data@coords[group == testing.group, ]
+```
+
+#create train and test data for absence
+```{r}
+# Repeat the process for pseudo-absence points
+set.seed(10)
+group.background <- kfold(x = backgr, k = 5)
+backg_train <- backgr[group.background != testing.group, ]
+backg_test <- backgr[group.background == testing.group, ]
+
+```
+
+#Plot
+```{r}
+r <- raster(predictors, 1)
+plot(!is.na(r), col=c('white', 'light grey'), legend=FALSE)
+plot(ext, add=TRUE, col='red', lwd=2)
+points(backg_train, pch='-', cex=0.5, col='yellow')
+points(backg_test, pch='-',  cex=0.5, col='black')
+points(pres_train, pch= '+', col='green')
+points(pres_test, pch='+', col='blue')
+```
+
+
+#Maxent Models
+```{r}
+maxent()
+xm <- maxent(predictors, pres_train,backg_train, factors='Slope')
+plot(xm)
+response(xm)
+
+```
+
+# Evaluate model and indicate the best model with AIC and AUC scores
+```{r}
+e <- evaluate(pres_test, backg_test, xm, predictors)
+e
+
+```
+
+#Predict the model
+```{r}
+px <- predict(predictors, xm, ext=ext, progress='')
+```
+
+```{r}
+par(mfrow=c(1,2))
+plot(px, main='Maxent, raw values')
+plot(aceh$geometry, add=TRUE, border='dark grey')
+```
+
+#generate threshold and plot it
+```{r}
+stat_used <- "spec_sens"
+tr <- threshold(e, stat_used)
+plot(px > tr, main='presence/absence')
+plot(aceh$geometry, add=TRUE, border='dark grey')
+#points(pres_train, pch='+')
+
+```
+
+# Generate a map with threshold
+```{r}
+predict_threshold <- px > tr
+rm <- c(0, NA)
+reclassmatrix  <- matrix(rm, ncol = 2)
+predict_threshold <- reclassify(predict_threshold, reclassmatrix)
+
+```
+
+# Write raster ONCE
+```{r}
+
+raster::writeRaster(px, paste0("~/My R/Advanced_Statistics/summerproject/species_modelling/results/maxent/predicted_maxent.tif"), overwrite = TRUE)
+```
+
+# Write raster depends on threshold
+```{r}
+threshold_used <- paste(tr, stat_used)
+date_now <- format(Sys.time(), "%Y-%m-%d %H-%M-%S")
+
+raster::writeRaster(predict_threshold, paste0("~/My R/Advanced_Statistics/summerproject/species_modelling/results/maxent/predicted_maxent_",stat_used,".tif"), overwrite = TRUE)
+
+write.table(threshold_used, paste0("~/My R/Advanced_Statistics/summerproject/species_modelling/results/maxent/threshold_",stat_used,"_",date_now,".txt"))
+
+```

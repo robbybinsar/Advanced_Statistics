@@ -1,0 +1,267 @@
+---
+title: "Species_modelling historical"
+subs
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Load packages
+```{r}
+library("sp")
+library("raster")
+library("maptools")
+library("rgdal")
+library("dismo")
+library("sf")
+library("terra")
+library("geodata")
+``` 
+
+# Load environmental variables
+```{r}
+
+bioclim.data <- list.files("~/My R/Advanced_Statistics/summerproject/species_modelling/historical/20182019",pattern = "*.tif$", full.names = TRUE)
+bioclim.data <- lapply(bioclim.data, raster)
+bioclim.data <- stack(bioclim.data)
+bioclim.data$Tree_cover  <- extractByMask(bioclim.data$Tree_cover, bioclim.data$Distance_to_Crops, spatial = T)
+matr <- c(100, bioclim.data@layers[[8]]@data@max, 0)
+rec_matrix <- matrix(matr, ncol = 3)
+bioclim.data$Tree_cover <- reclassify(bioclim.data$Tree_cover, rec_matrix)
+
+bioclim.data <- dropLayer(bioclim.data, "Slope")
+```
+
+# Load observation data and Aceh Boundary
+```{r}
+obs.data <- readOGR("~/My R/Advanced_Statistics/summerproject/species_modelling/all_dataset_new.shp")
+names(obs.data)[2]<- "latitude"
+names(obs.data)[3] <- "longitude"
+
+aceh <- st_read("~/My R/Advanced_Statistics/summerproject/BATAS_PROVINSI_ACEH.shp")
+colnames(obs.data@coords)[1] <- "longitude"
+colnames(obs.data@coords)[2] <- "latitude"
+
+```
+
+# Set geographic extent
+```{r}
+#Determine geographic extent of our data
+geographic.extent <- extent(bioclim.data)
+
+```
+
+#plot observation data and Aceh boundary
+```{r, fig.dim= c(6,8)}
+# Plot the base map
+plot(aceh$geometry, 
+     axes = TRUE, 
+     col = "grey95")
+
+# Add the points for individual observation
+points(obs.data@coords, 
+       col = "olivedrab")
+# And draw a little box around the graph
+box()
+
+
+```
+
+# Build the distribution model
+```{r}
+
+# Build species distribution model
+bc.model <- bioclim(x = bioclim.data, p = obs.data@coords)
+response(bc.model)
+
+```
+
+# Predict the distribution model
+```{r}
+# Predict presence from model
+predict.presence.historical <- dismo::predict(object = bc.model, 
+                                   x = bioclim.data,
+                                   ext=  geographic.extent)
+
+```
+
+
+```{r, fig.dim= c(6,8)}
+# Plot Boundaries
+plot(aceh$geometry, 
+     axes = TRUE, 
+     col = "grey95")
+
+# Add model probabilities
+plot(predict.presence.historical, add = TRUE)
+
+#points(obs.data@coords, 
+       #col = "olivedrab")
+box()
+
+```
+
+#The pseudo-absence point
+
+```{r}
+# Use the bioclim data files for sampling resolution
+bil.files <- list.files(path = "~/My R/Advanced_Statistics/summerproject/species_modelling/historical/20182019", 
+                          pattern = "*.tif$", 
+                          full.names = TRUE)
+
+# We only need one file, so use the first one in the list of .bil files
+mask <- raster(bil.files[1])
+
+# Set the seed for the random-number generator to ensure results are similar
+set.seed(20210707)
+
+# Randomly sample points (same number as our observed points)
+background <- randomPoints(mask = mask,     # Provides resolution of sampling points
+                   n = nrow(obs.data),      # Number of random points
+                   ext = geographic.extent, # Spatially restricts sampling
+                   extf = 1.25)             # Expands sampling a little bit
+
+```
+
+# Plot the pseudo-absence points and observation data
+```{r, fig.dim= c(6,8)}
+plot(aceh$geometry,
+     axes = TRUE, 
+     col = "grey95",
+     main = "Presence and pseudo-absence points")
+
+# Add the background points
+points(background, col = "grey30", pch = 1, cex = 0.75)
+
+# Add the observations
+points(obs.data@coords, 
+       col = "olivedrab", 
+       pch = 20, 
+       cex = 0.75)
+
+box()
+
+```
+
+#create train and test data for pseudo-absence
+```{r}
+# Arbitrarily assign group 1 as the testing data group
+testing.group <- 1
+
+# Create vector of group memberships
+group.presence <- kfold(x = obs.data@coords, k = 5) # kfold is in dismo package
+```
+
+```{r}
+head(group.presence)
+# Should see even representation in each group
+table(group.presence)
+
+```
+
+```{r}
+# Separate observations into training and testing groups
+presence.train <- obs.data[group.presence != testing.group, ]
+presence.test <- obs.data[group.presence == testing.group, ]
+
+# Repeat the process for pseudo-absence points
+group.background <- kfold(x = background, k = 5)
+background.train <- background[group.background != testing.group, ]
+background.test <- background[group.background == testing.group, ]
+
+```
+
+#Training and testing the model and predict
+
+```{r}
+# Build a model using training data
+bc.model <- bioclim(x = bioclim.data, p =presence.train@coords)
+
+# Predict presence from model (same as previously, but with the update model)
+predict.presence.pseudo <- dismo::predict(object = bc.model, 
+                                   x = bioclim.data, 
+                                   ext = geographic.extent)
+response(bc.model)
+
+```
+
+# Generate Threshold
+```{r}
+# Use testing data for model evaluation
+bc.eval <- evaluate(p = presence.test@coords,   # The presence testing data
+                    a = background.test, # The absence testing data
+                    model = bc.model,    # The model we are evaluating
+                    x = bioclim.data)    # Climatic variables for use by model
+
+# Determine minimum threshold for "presence"
+stat_used <- "spec_sens"
+bc.threshold <- threshold(x = bc.eval, stat = stat_used)
+
+```
+
+# Generate a map with threshold
+```{r}
+reclass_predict.presence.pseudo <- predict.presence.pseudo > bc.threshold
+rm <- c(0, NA)
+reclassmatrix  <- matrix(rm, ncol = 2)
+reclass_predict.presence.pseudo <- reclassify(reclass_predict.presence.pseudo, reclassmatrix)
+
+```
+
+#Plot the predicted distribution
+```{r, fig.dim= c(6,8)}
+# Plot base map
+plot(aceh$geometry, 
+     axes = TRUE, 
+     col = "grey95")
+
+# Add model probabilities
+plot(predict.presence.pseudo, add = TRUE)
+
+# Add original observations
+#points(obs.data@coords, col = "black", pch = "+", cex = 0.75)
+box()
+```
+
+#plot the map with threshold
+```{r, fig.dim= c(6,8)}
+# Plot base map
+plot(aceh$geometry,
+     axes = TRUE, 
+     col = "grey95")
+
+# Only plot areas where probability of occurrence is greater than the threshold
+plot(predict.presence.pseudo > bc.threshold, 
+     add = TRUE, 
+     legend = FALSE, 
+     col = c(NA, "olivedrab"))
+
+# And add those observations
+#points(obs.data@coords, 
+       #col = "black",
+       #pch = "+", 
+       #cex = 0.75)
+
+box()
+
+```
+
+# Write raster ONCE
+```{r}
+raster::writeRaster(predict.presence.historical, paste0("~/My R/Advanced_Statistics/summerproject/species_modelling/results/bioclim/Historical_presence_only.tif"), overwrite = TRUE)
+
+raster::writeRaster(predict.presence.pseudo, paste0("~/My R/Advanced_Statistics/summerproject/species_modelling/results/bioclim/Historical_presence_absence.tif"), overwrite = TRUE)
+```
+
+# Write raster depends on threshold
+```{r}
+threshold_used <- paste(bc.threshold, stat_used)
+date_now <- format(Sys.time(), "%Y-%m-%d %H-%M-%S")
+
+raster::writeRaster(reclass_predict.presence.pseudo, paste0("~/My R/Advanced_Statistics/summerproject/species_modelling/results/bioclim/Historical_presence_absence_",stat_used,".tif"), overwrite = TRUE)
+
+write.table(threshold_used, paste0("~/My R/Advanced_Statistics/summerproject/species_modelling/results/bioclim/threshold_",stat_used,"_",date_now,".txt"))
+
+```
