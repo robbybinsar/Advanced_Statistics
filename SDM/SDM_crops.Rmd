@@ -1,0 +1,239 @@
+---
+title: "SDM_crops"
+output: word_document
+date: "2022-08-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Load packages
+```{r}
+library("sp")
+library("raster")
+library("maptools")
+library("rgdal")
+library("dismo")
+library("sf")
+library("terra")
+library("geodata")
+library("rJava")
+library("bnspatial")
+library(SDMtune)
+library(dismo)
+library(zeallot)
+``` 
+
+# Load environmental variables
+```{r}
+predictors <- list.files("~/My R/Advanced_Statistics/summerproject/species_modelling/historical/20182019",pattern = "*.tif$", full.names = TRUE)
+predictors <- predictors[c(1,6,7,8)]
+predictors <- lapply(predictors, raster)
+predictors <- stack(predictors)
+```
+
+# Load observation data and Aceh Boundary
+```{r}
+obs.data <- readOGR("~/MSc Biodiversity and Conservation/summer project/summer_project/predict_crop/random_points_crop2.shp")
+
+aceh <- st_read("~/My R/Advanced_Statistics/summerproject/BATAS_PROVINSI_ACEH.shp")
+colnames(obs.data@coords)[1] <- "longitude"
+colnames(obs.data@coords)[2] <- "latitude"
+
+```
+
+# Set geographic extent
+```{r}
+#Determine geographic extent of our data
+ext <- extent(predictors)
+```
+
+# Create random points
+
+```{r}
+# Use the bioclim data files for sampling resolution
+bil.files <- list.files(path = "~/My R/Advanced_Statistics/summerproject/species_modelling/historical/20182019", 
+                          pattern = "*.tif$", 
+                          full.names = TRUE)
+
+# We only need one file, so use the first one in the list of .bil files
+mask <- raster(bil.files[1])
+
+# Set the seed for the random-number generator to ensure results are similar
+set.seed(20210707)
+
+# Randomly sample points (same number as our observed points)
+backgr <- randomPoints(mask = predictors,     # Provides resolution of sampling points
+                   n = 15000,      # Number of random points
+                   ext = ext, # Spatially restricts sampling
+                   extf = 1.25)             # Expands sampling a little bit
+
+colnames(backgr) = c('longitude', 'latitude')
+```
+
+# Plot the pseudo-absence points and observation data
+```{r, fig.dim= c(6,8)}
+plot(aceh$geometry,
+     axes = TRUE, 
+     col = "grey95",
+     main = "Presence and pseudo-absence points")
+
+# Add the background points
+points(backgr, col = "grey30", pch = 1, cex = 0.75)
+
+# Add the observations
+points(obs.data@coords, 
+       col = "olivedrab", 
+       pch = 20, 
+       cex = 0.75)
+
+box()
+
+```
+
+```{r}
+# Prepare data
+
+data <- prepareSWD(species = "Elephants", p = obs.data@coords,
+                   a = backgr, env = predictors, categorical = c("Slope","Soil_type")) #categorical = "Slope"
+
+
+c(train, test) %<-% trainValTest(data, test = 0.2, only_presence = T,
+                                 seed = 25)
+
+# Train model
+model <- train("Maxent", data = train)
+
+```
+
+```{r}
+#Variable importance
+model@model@results
+vi <- maxentVarImp(model)
+vi
+plotVarImp(vi[, 1:2])
+plotVarImp(vi[, c(1,3)])
+
+# Compute the permutation importance
+vi_maxent <- varImp(model, permut = 10)
+# Print it
+vi_maxent
+# Compare with Maxent output
+maxentVarImp(model)
+
+```
+
+```{r}
+#Model Report (should be after variable selection and reduction)
+library(kableExtra)
+library(rasterVis)
+modelReport(model, type = "cloglog", 
+            folder = "maxent_crop", 
+            test = test,
+            response_curves = TRUE, only_presence = TRUE, jk = TRUE,
+            env = predictors)
+```
+
+```{r}
+#Data-driven variable selection
+set.seed(25)
+bg <- dismo::randomPoints(predictors, 5000)
+bg <- prepareSWD(species = "Bgs", a = bg, env = predictors )#categorical = "Slope"
+plotCor(bg, method = "spearman", cor_th = 0.8)
+corVar(bg, method = "spearman", cor_th = 0.8)
+
+#Remove highly correlated variables
+selected_variables_model <- varSel(model, metric = "aicc", bg4cor = bg,
+                                   method = "spearman", cor_th = 0.8,
+                                   env = predictors, use_pc = TRUE, permut = 3)
+
+#Remove variables with low importance
+varImp(model, permut = 1)
+
+cat("Testing AUC before: ", auc(model, test = test))
+reduced_variables_model <- reduceVar(model, th = 6, metric = "auc",
+                                     test = test, permut = 1)
+cat("Testing AUC after: ", auc(reduced_variables_model, test = test))
+
+```
+
+#Evaluation
+The use of AUC in evaluating SDMs has been criticized (Lobo et al. 2008, Jiménez-Valverde 2011). A particularly sticky problem is that the values of AUC vary with the spatial extent used to select background points. Generally, the larger that extent, the higher the AUC value. Therefore, AUC values are generally biased and cannot be directly compared. Hijmans (2012) suggests that one could remove “spatial sorting bias” (the difference between the distance from testing-presence to training-presence and the distance from testing-absence to training-presence points) through “point-wise distance sampling”.
+
+sb[,1] / sb[,2] is an indicator of spatial sorting bias (SSB). If there is no SSB this value should be 1, in these data it is close to zero, indicating that SSB is very strong.
+```{r}
+tot_pres <- sum(test@pa)
+pres_test <- test@coords[1:tot_pres,]
+backg_test <- test@coords[(tot_pres+1):nrow(test@coords),]
+
+tot_pres_train <- sum(train@pa)
+pres_train <- train@coords[1:tot_pres_train,]
+
+
+sb <- ssb(pres_test, backg_test, pres_train)
+ssb <- sb[,1] / sb[,2]
+print(ssb)
+```
+
+If SSB is strong (closer to 0); create subsample in which SSB is removed using the "point-wise distance sampling"
+
+i <- pwdSample(presence.test, background.test, presence.train, n=1, tr=0.1)
+pres_test_pwd <- presence.test[!is.na(i[,1]), ]
+back_test_pwd <- background.test[na.omit(as.vector(i)), ]
+sb2 <- ssb(pres_test_pwd, back_test_pwd, presence.train)
+sb2[1]/ sb2[2]
+
+# Evaluate model and indicate the best model with AIC and AUC scores
+```{r}
+e <- evaluate(pres_test, backg_test, model, predictors)
+```
+
+#Predict the model
+```{r}
+px <- predict(predictors, model, ext=ext, progress='')
+```
+
+```{r}
+par(mfrow=c(1,2))
+plot(px, main='Maxent, raw values')
+plot(aceh$geometry, add=TRUE, border='dark grey')
+```
+
+#generate threshold and plot it
+```{r}
+stat_used <- "spec_sens"
+tr <- threshold(e, stat_used)
+plot(px > tr, main='presence/absence')
+plot(aceh$geometry, add=TRUE, border='dark grey')
+#points(pres_train, pch='+')
+
+```
+
+# Generate a map with threshold
+```{r}
+predict_threshold <- px > tr
+rm <- c(0, NA)
+reclassmatrix  <- matrix(rm, ncol = 2)
+predict_threshold <- reclassify(predict_threshold, reclassmatrix)
+
+```
+
+# Write raster ONCE
+```{r}
+
+raster::writeRaster(px, paste0("~/My R/Advanced_Statistics/summerproject/species_modelling/results/maxent/relative_maxent_crop.tif"), overwrite = TRUE)
+```
+
+# Write raster depends on threshold
+```{r}
+threshold_used <- paste(tr, stat_used)
+date_now <- format(Sys.time(), "%Y-%m-%d %H-%M-%S")
+
+raster::writeRaster(predict_threshold, paste0("~/My R/Advanced_Statistics/summerproject/species_modelling/results/maxent/predicted_crop_",stat_used,".tif"), overwrite = TRUE)
+
+mtr <- matrix( c(tr, stat_used, ssb,e@auc), ncol = 4, dimnames = list(c("row1"),c("threshold", "stat_used","ssb","AUC") ))
+
+write.csv(mtr, paste0("~/My R/Advanced_Statistics/summerproject/species_modelling/results/maxent/threshold_crop_",stat_used,"_",date_now,".csv"))
+
+```
